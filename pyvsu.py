@@ -109,6 +109,18 @@ class IncompleteDataException(Exception):
     def __str__(self):
         return repr('data written to sector must be 256 bytes, size provided: {} bytes'.format(self.length))
 
+def display_switches(slot):
+    slot = '{0:b}'.format(slot).zfill(4)
+    img = [
+            ['\t┌──┐','\t┌──┐'],
+            ['\t│  │','\t│[]│'],
+            ['\t│[]│','\t│  │'],
+            ['\t└──┘','\t└──┘'],
+            ['\t x  ','\t x  ']
+            ]
+    for line in img:
+        print(''.join([line[int(_)].replace('x', str(4-i)) for i, _ in enumerate(slot)]))
+
 def read_sector(sector):
     # the read command is 'r' followed by a sector number
     # command 'r' + sector number
@@ -176,6 +188,8 @@ def write_image(filename):
 
 def write_rom(sector, data):
     print('writing rom...')
+    
+    # error checking is accomplished automatically in write_sector()
     for x in range(16):
         write_sector(sector+x, data[x*256:(x*256)+256])
 
@@ -210,6 +224,9 @@ with serial.Serial(args.port[0], 115200, timeout=1) as vsu_rom:
         for f in args.bin:
             with open(f, 'rb') as rom_file:
                 rom_data.extend(rom_file.read())
+
+        # certain games (flight2000) only have one rom, U9, populated
+        # in this case we pad the remaining space
         if len(rom_data) == 2048:
             rom_data.extend(b'\xff' * 2048)
         if len(rom_data) != 4096:
@@ -217,4 +234,7 @@ with serial.Serial(args.port[0], 115200, timeout=1) as vsu_rom:
             exit()
 
         write_rom(sector, rom_data)
+        print('ROM programmed, use the switch settings below:')
+        display_switches(int((sector-2)/16))
+
     print('operation complete')
