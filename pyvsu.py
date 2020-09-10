@@ -68,7 +68,7 @@ bulk_grp = par.add_mutually_exclusive_group()
 bulk_grp.add_argument('-d', '--dump', action='store_true',
         help='dump device image to specified filename'
         )
-bulk_grp.add_argument('-i', '--image', action='store_true',
+bulk_grp.add_argument('-w', '--write', action='store_true',
         help='write specified image file to device'
         )
 rom_grp = par.add_mutually_exclusive_group()
@@ -80,13 +80,22 @@ rom_grp.add_argument('-c', '--custom', type=int, nargs=1,
         action='store', choices=list(range(7)),
         help='custom ROM slot number to program'
         )
+conf_grp = par.add_mutually_exclusive_group()
+conf_grp.add_argument('-i', '--info', action='store_true',
+        help=('display volume and playback speed configuration\n'
+            'optionally provide a filename to output data for editing'
+            'in JSON format')
+        )
+conf_grp.add_argument('-u', '--update', action='store_true',
+        help='update VSU-2 volume and speed configuration with data from specified file'
+        )
 par.add_argument('bin', metavar='F', nargs='*',
         action='store', 
         help=('output filename for reading from VSU-2, or input filesname for writing to VSU-2\n'
             'separate files for U9 and U10 can be provided\n'
             'always specify U9 and U10 in order\n'
             'ex:\n'
-            '\tpython pyvsu.py -c 0 SND_U9.716 SND_U10.716')
+            '\tpython pyvsu.py -p COM 1 -c 0 SND_U9.716 SND_U10.716')
         )
 args = par.parse_args()
 print(args)
@@ -193,6 +202,53 @@ def write_rom(sector, data):
     for x in range(16):
         write_sector(sector+x, data[x*256:(x*256)+256])
 
+def display_configuration():
+    factory = read_sector(0)
+    user = read_sector(1)
+    print('VSU-2 Configuration:')
+
+    print('          factory                            user')
+    print('   volume │  sample rate            volume │  sample rate')
+
+    print('  ┌───────┼────────────────        ┌───────┼────────────────')
+    for x in range(8):
+        f_vol = factory[x] #int.from_bytes(factory[x])
+        u_vol = user[x] #int.from_bytes(user[x])
+        
+        # when user values are FFh, it means they have not been set
+        # volume levels above 11h will overflow, so that is the max
+        # this is enforced on the microcontroller by falling back to
+        # factory settings
+        if u_vol > 17:
+            u_vol = 'N/A'
+        else:
+            u_vol = '{:3i}'.format(u_vol)
+
+        # sample rate is ((Fosc/4)/8)/(<setting>+3)
+        # Fosc = 64 Mhz
+        # 4 clock ticks per instruction cycle
+        # timer prescaler of 8 cycles
+        #
+        # the +3 is added since this is approximate. it takes between 24-32 cycles
+        # before the playback interrupt is restarted on the microcontroller
+
+        # speed values are at an 8 byte offset from volume
+        # factory speeds are assumed to always be valid
+        f_spd = factory[x+8] #int.from_bytes(factory[x+8])
+        f_sr = 2000000 / (f_spd+3)
+
+        u_sr = user[x+8] #int.from_bytes(user[x+8])
+        if u_sr == 255:
+            u_txt = 'N/A'
+        else:
+            u_spd = user[x+8] #int.from_bytes(factory[x+8])
+            u_sr = 2000000 / (u_spd+3)
+            u_txt = '{:3d} ({:5.0f hz})'.format(u_spd, u_txt)
+
+        print(' {}│   {:3d} │ {:3d} ({:5.0f} hz)        {}│   {} │ {}'.format(
+                x, f_vol, f_spd, f_sr, x, u_vol, u_txt))
+
+
 
 with serial.Serial(args.port[0], 115200, timeout=1) as vsu_rom:
     if len(args.bin) > 2:
@@ -205,11 +261,13 @@ with serial.Serial(args.port[0], 115200, timeout=1) as vsu_rom:
             print('please specify a filename to write memory contents')
             exit()
         dump_image(args.bin[0])
-    elif args.image:
+    elif args.write:
         if len(args.bin) != 1:
             print('please specify a filename with a valid image')
             exit()
         write_image(args.bin[0])
+    elif args.info:
+        display_configuration()
     elif args.game or args.custom:
         # offset two sectors for factory/user config
         sector = 2
