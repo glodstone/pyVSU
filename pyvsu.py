@@ -54,6 +54,7 @@ except ImportError:
     print('Unable to load pySerial - is it installed?')
 import argparse
 import time
+import json
 
 par = argparse.ArgumentParser(
         description='pyVSU-2 ROM programming and configuration utility',
@@ -82,23 +83,22 @@ rom_grp.add_argument('-c', '--custom', type=int, nargs=1,
         )
 conf_grp = par.add_mutually_exclusive_group()
 conf_grp.add_argument('-i', '--info', action='store_true',
-        help=('display volume and playback speed configuration\n'
-            'optionally provide a filename to output data for editing'
+        help=('display volume and sample rate configuration\n'
+            'optionally provide a filename to output data for editing '
             'in JSON format')
         )
 conf_grp.add_argument('-u', '--update', action='store_true',
-        help='update VSU-2 volume and speed configuration with data from specified file'
+        help='update VSU-2 volume and sample rate configuration with data from specified file'
         )
 par.add_argument('bin', metavar='F', nargs='*',
         action='store', 
-        help=('output filename for reading from VSU-2, or input filesname for writing to VSU-2\n'
-            'separate files for U9 and U10 can be provided\n'
-            'always specify U9 and U10 in order\n'
-            'ex:\n'
-            '\tpython pyvsu.py -p COM 1 -c 0 SND_U9.716 SND_U10.716')
+        help=('input/output filename(s) with use depending on command\n'
+            'when writing a ROM, separate files for U9 and U10 can be provided\n'
+            '*always specify U9 and U10 in order*\n\n'
+            'example - program a ROM into custom slot 0:\n'
+            '\tpython pyvsu.py -p COM1 -c 0 SND_U9.716 SND_U10.716')
         )
 args = par.parse_args()
-print(args)
 
 class WriteSectorException(Exception):
     def __init__(self, sector):
@@ -202,7 +202,7 @@ def write_rom(sector, data):
     for x in range(16):
         write_sector(sector+x, data[x*256:(x*256)+256])
 
-def display_configuration():
+def display_configuration(out_file=None):
     factory = read_sector(0)
     user = read_sector(1)
     print('VSU-2 Configuration:')
@@ -212,8 +212,8 @@ def display_configuration():
 
     print('  ┌───────┼────────────────        ┌───────┼────────────────')
     for x in range(8):
-        f_vol = factory[x] #int.from_bytes(factory[x])
-        u_vol = user[x] #int.from_bytes(user[x])
+        f_vol = factory[x]
+        u_vol = user[x]
         
         # when user values are FFh, it means they have not been set
         # volume levels above 11h will overflow, so that is the max
@@ -222,7 +222,7 @@ def display_configuration():
         if u_vol > 17:
             u_vol = 'N/A'
         else:
-            u_vol = '{:3i}'.format(u_vol)
+            u_vol = '{:3d}'.format(u_vol)
 
         # sample rate is ((Fosc/4)/8)/(<setting>+3)
         # Fosc = 64 Mhz
@@ -234,22 +234,45 @@ def display_configuration():
 
         # speed values are at an 8 byte offset from volume
         # factory speeds are assumed to always be valid
-        f_spd = factory[x+8] #int.from_bytes(factory[x+8])
+        f_spd = factory[x+8]
         f_sr = 2000000 / (f_spd+3)
 
-        u_sr = user[x+8] #int.from_bytes(user[x+8])
+        u_sr = user[x+8]
         if u_sr == 255:
-            u_txt = 'N/A'
+            u_txt = '    N/A'
         else:
-            u_spd = user[x+8] #int.from_bytes(factory[x+8])
+            u_spd = user[x+8]
             u_sr = 2000000 / (u_spd+3)
-            u_txt = '{:3d} ({:5.0f hz})'.format(u_spd, u_txt)
+            u_txt = '{:3d} ({:5.0f} hz)'.format(u_spd, u_sr)
 
         print(' {}│   {:3d} │ {:3d} ({:5.0f} hz)        {}│   {} │ {}'.format(
                 x, f_vol, f_spd, f_sr, x, u_vol, u_txt))
 
+    if out_file is None:
+        return
+        
+    u_spd = {i:_ for i, _ in enumerate(user[8:16])}
+    u_vol = {i:_ for i, _ in enumerate(user[0:8])}
 
+    with open(out_file, 'w') as handle:
+        json.dump({'volume':u_vol,'sample_rate':u_spd},
+                handle, indent=4, sort_keys=True)
+    print('configuration written to: {}'.format(out_file))
 
+def update_configuration(conf_file):
+
+    print('writing user configuration...')
+
+    with open(conf_file, 'r') as handle:
+        conf = json.load(handle)
+    sector_data = bytearray(b'\xff'*256)
+    for x in range(8):
+        sector_data[x] = conf['volume'][str(x)]
+        sector_data[x+8] = conf['sample_rate'][str(x)]
+
+    write_sector(1, sector_data)
+    display_configuration()
+        
 with serial.Serial(args.port[0], 115200, timeout=1) as vsu_rom:
     if len(args.bin) > 2:
         print('a maximum of 2 filenames may be specified')
@@ -267,7 +290,14 @@ with serial.Serial(args.port[0], 115200, timeout=1) as vsu_rom:
             exit()
         write_image(args.bin[0])
     elif args.info:
-        display_configuration()
+        out_file = args.bin[0] if len(args.bin) == 1 else None
+        display_configuration(out_file=out_file)
+    elif args.update:
+        if len(args.bin) != 1:
+            print('please specify a configuration file')
+            exit()
+        update_configuration(args.bin[0])
+
     elif args.game or args.custom:
         # offset two sectors for factory/user config
         sector = 2
@@ -295,4 +325,5 @@ with serial.Serial(args.port[0], 115200, timeout=1) as vsu_rom:
         print('ROM programmed, use the switch settings below:')
         display_switches(int((sector-2)/16))
 
+    print('')
     print('operation complete')
