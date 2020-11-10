@@ -38,9 +38,9 @@
 # or violate system constraints
 # 
 # sector 2+ is the start of ROM data
-# commands for programming separate "game" slots from
-# "custom" slots to lower the risk of overwriting
-# included ROMs by accident
+# although memory is contiguous, commands for programming 
+# "game" slots are separate from "custom" slots
+# to lower the risk of overwriting included ROMs by accident
 #
 # all ROM files provided must be in binary format
 # i.e. not in HEX file format
@@ -216,10 +216,10 @@ def display_configuration(out_file=None):
         u_vol = user[x]
         
         # when user values are FFh, it means they have not been set
-        # volume levels above 11h will overflow, so that is the max
-        # this is enforced on the microcontroller by falling back to
-        # factory settings
-        if u_vol > 17:
+        # volume levels above 11h will overflow
+        # exceeding this value will cause the microcontroller to
+        # falling back to factory settings
+        if u_vol > 17: # 11h
             u_vol = 'N/A'
         else:
             u_vol = '{:3d}'.format(u_vol)
@@ -229,20 +229,20 @@ def display_configuration(out_file=None):
         # 4 clock ticks per instruction cycle
         # timer prescaler of 8 cycles
         #
-        # the +3 is added since this is approximate. it takes between 24-32 cycles
-        # before the playback interrupt is restarted on the microcontroller
+        # the +2.5 is approximate since
+        # there is extra overhead in the interrupt routine
 
-        # speed values are at an 8 byte offset from volume
+        # speed values are stored at an 8 byte offset from volume
         # factory speeds are assumed to always be valid
         f_spd = factory[x+8]
-        f_sr = 2000000 / (f_spd+3)
+        f_sr = 2000000.0 / (f_spd+2.5)
 
         u_sr = user[x+8]
         if u_sr == 255:
             u_txt = '    N/A'
         else:
             u_spd = user[x+8]
-            u_sr = 2000000 / (u_spd+3)
+            u_sr = 2000000.0 / (u_spd+2.5)
             u_txt = '{:3d} ({:5.0f} hz)'.format(u_spd, u_sr)
 
         print(' {}│   {:3d} │ {:3d} ({:5.0f} hz)        {}│   {} │ {}'.format(
@@ -305,8 +305,8 @@ with serial.Serial(args.port[0], 115200, timeout=1) as vsu_rom:
             # each ROM occupies 4Kb / 16 sectors
             sector += args.game[0] * 16
         else:
-            # custom files come after all games, offset 96 sectors
-            sector += (args.custom[0] * 16) + 96
+            # custom files come after all games, offset 112 sectors
+            sector += (args.custom[0] * 16) + 112
 
         rom_data = bytearray()
         for f in args.bin:
